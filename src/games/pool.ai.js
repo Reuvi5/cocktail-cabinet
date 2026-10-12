@@ -18,15 +18,16 @@ const PoolBrain = (() => {
     }
     return true;
   }
-  // the line doesn't run over a hole in the cloth (the ellipse's focus pocket), unless that hole is the goal
+  const segDist = (px, py, ax, ay, bx, by) => { const c = L.closestOnSeg(px, py, ax, ay, bx, by); return Math.hypot(px - c[0], py - c[1]); };
+  // a straight line is only a straight shot if it misses the focus hole (unless that's the goal), the portals and the bumpers
   function holesClear(T, ax, ay, bx, by, goal) {
-    for (const p of T.pockets) {
-      if (!p.hole || (goal && goal.px === p.x && goal.py === p.y)) continue;
-      const c = L.closestOnSeg(p.x, p.y, ax, ay, bx, by);
-      if (Math.hypot(p.x - c[0], p.y - c[1]) < p.cap + 3) return false;
-    }
+    for (const p of T.pockets) if (p.hole && !(goal && goal.px === p.x && goal.py === p.y) && segDist(p.x, p.y, ax, ay, bx, by) < p.cap + 3) return false;
+    for (const p of T.portals || []) if (segDist(p.x, p.y, ax, ay, bx, by) < p.r + 3) return false;
+    for (const u of T.bumpers || []) if (segDist(u.x, u.y, ax, ay, bx, by) < u.r + R + 1) return false;
     return true;
   }
+  // does the line cross the gravity well? (the path will bend, so the shot is less sure)
+  const wellBends = (T, ax, ay, bx, by) => !!T.well && segDist(T.well.x, T.well.y, ax, ay, bx, by) < T.well.r * 0.85;
   // the line stays on the cloth (stops `short` pixels before b), so cushions and corners don't block it
   function clothClear(T, ax, ay, bx, by, short = 0) {
     const len = Math.hypot(bx - ax, by - ay) - short;
@@ -69,6 +70,7 @@ const PoolBrain = (() => {
         w = (g.hole ? g.cap * 0.75 : g.cap * 0.7) * face; dp = Math.hypot(g.x - t.x, g.y - t.y);
       }
       if (!ballsClear(balls, cx, cy, gx, gy, [t.n, 0]) || !clothClear(T, cx, cy, gx, gy) || !holesClear(T, cx, cy, gx, gy)) continue;
+      if (wellBends(T, cx, cy, gx, gy) || (!g.focus && wellBends(T, t.x, t.y, g.x, g.y))) w *= 0.45;
       const vObj = L.speedFor(dp, 90), vHit = vObj / (cosc * (1 + L.E_BALL) / 2), v0 = L.speedFor(dc, vHit) * 1.08;
       if (v0 > L.MAXV * 1.12) continue;
       const tol = w * 2 * R * cosc / (dp * (dc + 20));
@@ -111,21 +113,23 @@ const PoolBrain = (() => {
     }
     return best;
   }
-  // imagine a batch of other shots (banks, combinations, kisses); keep one that still pots if the aim is a little off
+  // imagine a batch of other shots (banks, combinations, swerves, portal and bumper shots);
+  // keep one that still pots if the aim is a little off
   function search(m, side, tries, sigma, rng) {
     let best = null;
     for (let i = 0; i < tries; i++) {
-      const a = rng.range(0, TAU), p = rng.range(0.2, 0.95), j = judge(m, side, a, p);
+      const a = rng.range(0, TAU), p = rng.range(0.2, 0.95), sx = rng.chance(0.5) ? rng.range(-0.9, 0.9) : 0, sy = rng.range(-0.8, 0.8);
+      const j = judge(m, side, a, p, sx, sy);
       if (!j.pots) continue;
-      const robust = [-1.5, 1.5].filter(e => judge(m, side, a + e * sigma, p).pots).length / 2;
+      const robust = [-1.5, 1.5].filter(e => judge(m, side, a + e * sigma, p, sx, sy).pots).length / 2;
       const score = (0.4 + 0.6 * robust) * (0.7 + 0.3 * leave(m, side, j.r.balls, sigma));
-      if (!best || score > best.score) best = { a, p, score };
+      if (!best || score > best.score) best = { a, p, sx, sy, score };
     }
     return best;
   }
   // is this shot legal, and does it pot one of ours? (judged on a copy of the table)
-  function judge(m, side, a, p) {
-    const r = L.simulate(m.table, m.balls, a, p), K = L.kind, g = m.group[side], tg = m.targets(side).map(b => b.n);
+  function judge(m, side, a, p, sx = 0, sy = 0) {
+    const r = L.simulate(m.table, m.balls, a, p, 20, sx, sy), K = L.kind, g = m.group[side], tg = m.targets(side).map(b => b.n);
     const legal = !r.scratch && r.first != null && tg.includes(r.first) && !(r.potted.includes(8) && !(g && m.onTable(g) === 0));
     const potsOwn = r.potted.some(n => (g ? K(n) === g : n !== 8)) || (g && m.onTable(g) === 0 && r.potted.includes(8));
     return { legal, pots: legal && potsOwn, r };
@@ -141,7 +145,7 @@ const PoolBrain = (() => {
   return { search, leave, shots, chance, placements, nudge, kick, judge, erf };
 })();
 
-const poolSigma = k => 0.0015 + 0.061 * Math.pow(1 - k, 2.2);   // the computer's aiming wobble, in radians
+const poolSigma = k => 0.0015 + 0.08 * Math.pow(1 - k, 2.2);   // the computer's aiming wobble, in radians
 
 class PoolComputer {
   constructor(side, k, rng) { this.side = side; this.k = k; this.rng = rng; this.t = 0; this.plan = null; }
@@ -154,11 +158,12 @@ class PoolComputer {
     if (this.t < 1.1) return null;
     const k = this.k, sig = poolSigma(k), rng = this.rng;
     this.plan = null; this.t = 0;
-    return { shoot: { a: pl.a + rng.gauss() * sig, p: clamp(pl.p * (1 + rng.gauss() * (0.02 + 0.12 * (1 - k))), 0.05, 1) } };
+    const tip = 0.02 + 0.15 * (1 - k);   // how far the cue tip strays from where it meant to hit the cue ball
+    return { shoot: { a: pl.a + rng.gauss() * sig, p: clamp(pl.p * (1 + rng.gauss() * (0.02 + 0.12 * (1 - k))), 0.05, 1), sx: pl.sx + rng.gauss() * tip * 0.5, sy: pl.sy + rng.gauss() * tip } };
   }
   think(m) {
     const k = this.k, rng = this.rng, side = this.side, sig = poolSigma(k), B = PoolBrain;
-    if (m.isBreak) { const f = m.balls.find(b => b.n !== 0 && b.on && Math.abs(b.x - m.table.foot[0]) < 2 && Math.abs(b.y - m.table.foot[1]) < 2) || m.balls[1]; return { a: Math.atan2(f.y - m.cue.y, f.x - m.cue.x) + rng.range(-0.01, 0.01), p: 0.7 + 0.3 * k }; }
+    if (m.isBreak) { const f = m.balls.find(b => b.n !== 0 && b.on && Math.abs(b.x - m.table.foot[0]) < 2 && Math.abs(b.y - m.table.foot[1]) < 2) || m.balls[1]; return { a: Math.atan2(f.y - m.cue.y, f.x - m.cue.x) + rng.range(-0.01, 0.01), p: 0.7 + 0.3 * k, sx: 0, sy: 0 }; }
     let place = null, cx = m.cue.x, cy = m.cue.y;
     if (m.inHand && rng.chance(0.25 + 0.75 * k)) {          // a weak computer often leaves the cue ball where it is
       const ps = B.placements(m, side).sort((a, b) => b.s.tol - a.s.tol);
@@ -168,12 +173,17 @@ class PoolComputer {
     let cands = B.shots(view, side, { focus: k > 0.45 }).map(s => Object.assign(s, { pr: B.chance(s, sig) }));
     cands.sort((a, b) => b.pr - a.pr);
     let pick = null;
-    if (cands.length && rng.chance(0.6 * (1 - k))) pick = rng.pick(cands);              // misreads the table
+    if (cands.length && rng.chance(0.7 * (1 - k))) pick = rng.pick(cands);              // misreads the table
     else if (cands.length && k >= 0.35) {                                                 // checks its best ideas on a copy of the table
+      const spins = k > 0.55 ? [[0, 0], [0, 0.55], [0, -0.55]] : [[0, 0]];         // stun, follow, draw
       for (const c of cands.slice(0, 4)) {
-        const j = B.judge(view, side, c.a, c.p);
-        c.score = c.pr * (j.pots ? 1 : j.legal ? 0.35 : 0.05);
-        if (j.pots && k > 0.6) c.score *= 0.7 + 0.6 * B.leave(view, side, j.r.balls, sig);   // a strong player also plays for the next shot
+        c.score = -1;
+        for (const [sx, sy] of spins) {
+          const j = B.judge(view, side, c.a, c.p, sx, sy);
+          let sc = c.pr * (j.pots ? 1 : j.legal ? 0.35 : 0.05);
+          if (j.pots && k > 0.6) sc *= 0.7 + 0.6 * B.leave(view, side, j.r.balls, sig);   // a strong player also plays for the next shot
+          if (sc > c.score) { c.score = sc; c.sx = sx; c.sy = sy; }
+        }
       }
       pick = cands.slice(0, 4).sort((a, b) => b.score - a.score)[0];
       if (pick.score < 0.06) pick = null;
@@ -187,7 +197,7 @@ class PoolComputer {
       if (!pick) pick = B.kick(view, side, Math.round(4 + 26 * k), rng);
       if (!pick) pick = { a: rng.range(0, TAU), p: rng.range(0.3, 0.7) };
     }
-    return { a: pick.a, p: pick.p, place };
+    return { a: pick.a, p: pick.p, place, sx: pick.sx || 0, sy: pick.sy || 0 };
   }
 }
 
@@ -210,14 +220,19 @@ class PoolSimHuman {
         const sig = poolHumanSigma(s), cands = B.shots(view, side, { focus: s > 0.6 && rng.chance(s) }).map(c => Object.assign(c, { pr: B.chance(c, sig) * (1 + rng.gauss() * 0.35 * (1 - s)) }));
         cands.sort((a, b) => b.pr - a.pr);
         let pick = cands.length ? (rng.chance(0.55 + 0.45 * s) ? cands[0] : rng.pick(cands.slice(0, 3))) : null;
-        if (!pick || pick.pr < 0.04) pick = B.nudge(view, side) || B.kick(view, side, Math.round(4 + 14 * s), rng) || pick || { a: rng.range(0, TAU), p: 0.5 };
-        this.plan = { a: pick.a, p: pick.p, place };
+        let sx = 0, sy = 0;
+        if (pick && pick.pr >= 0.04 && rng.chance(0.15 + 0.6 * s)) {   // reads the guide's follow/draw line and picks a spin that avoids a scratch
+          for (const [vx, vy] of [[0, 0], [0, 0.5], [0, -0.5]]) { const j = B.judge(view, side, pick.a, pick.p, vx, vy); if (j.pots) { sx = vx; sy = vy; break; } }
+        }
+        if (!pick || pick.pr < 0.04) { pick = B.nudge(view, side) || B.kick(view, side, Math.round(4 + 14 * s), rng) || pick || { a: rng.range(0, TAU), p: 0.5 }; sx = sy = 0; }
+        this.plan = { a: pick.a, p: pick.p, place, sx, sy };
       }
     }
     const pl = this.plan;
     if (pl.place && m.inHand && !pl.placed) { pl.placed = true; return { place: pl.place }; }
     this.plan = null;
-    return { shoot: { a: pl.a + rng.gauss() * poolHumanSigma(s), p: clamp(pl.p * (1 + rng.gauss() * (0.05 + 0.12 * (1 - s))), 0.05, 1) } };
+    const tip = 0.05 + 0.15 * (1 - s);
+    return { shoot: { a: pl.a + rng.gauss() * poolHumanSigma(s), p: clamp(pl.p * (1 + rng.gauss() * (0.05 + 0.12 * (1 - s))), 0.05, 1), sx: (pl.sx || 0) + rng.gauss() * tip * 0.5, sy: (pl.sy || 0) + rng.gauss() * tip } };
   }
 }
 GAMES.pool.Computer = PoolComputer;

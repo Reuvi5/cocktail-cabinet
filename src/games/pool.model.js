@@ -3,11 +3,15 @@
    Side 0 (blue) breaks; side 1 (red) is the computer or a second player.
    Actions, on your turn only:
      { place: { x, y } }    with ball in hand: move the cue ball (checked here)
-     { shoot: { a, p } }    aim angle in radians, power 0..1
+     { shoot: { a, p, sx, sy } }   aim angle in radians, power 0..1, and where the cue tip
+                            strikes the cue ball: sy > 0 top spin (follow), sy < 0 back spin (draw),
+                            sx side spin (curves the ball and changes how it comes off a cushion)
+   Each table has a gadget: linked PORTALS (hexagon), pinball BUMPERS (cross), a gravity WELL (ellipse).
    The same physics runs for every player and for the computer's planning.
    ===================================================================== */
 const PoolLib = (() => {
   const R = 11, MAXV = 1500, MU = 220, LIN = 0.5, E_BALL = 0.94, E_RAIL = 0.78, STOP = 5, CX = 400, CY = 335;
+  const FOLLOW = 0.62, CURVE = 270, SPIN_LIFE = 1.4, DRAW_LIFE = 3, KICK = 240;   // spin and gadget strengths
 
   /* ---------- the three tables ----------
      walls are the cushion lines; a ball's centre stays at least R away from them.
@@ -30,13 +34,16 @@ const PoolLib = (() => {
   const crossV = [[310, 105], [490, 105], [490, 245], [650, 245], [650, 425], [490, 425], [490, 565], [310, 565], [310, 425], [150, 425], [150, 245], [310, 245]];
   const EA = 279, EB = 184, EC = Math.sqrt(EA * EA - EB * EB);   // ellipse the ball CENTRES follow: its foci are exact
   const TABLES = {
-    hexagon: poly('hexagon', 'Hexagon', hexV, hexV.map((_, i) => corner(hexV, i, 25)), [272, CY], [468, CY]),
-    cross: poly('cross', 'Cross', crossV, [0, 1, 3, 4, 6, 7, 9, 10].map(i => corner(crossV, i, 24)), [240, CY], [442, CY]),
+    hexagon: Object.assign(poly('hexagon', 'Hexagon', hexV, hexV.map((_, i) => corner(hexV, i, 25)), [272, CY], [468, CY]),
+      { portals: [{ x: 338, y: 190, r: 15 }, { x: 462, y: 480, r: 15 }] }),        // roll into one, come out of the other
+    cross: Object.assign(poly('cross', 'Cross', crossV, [0, 1, 3, 4, 6, 7, 9, 10].map(i => corner(crossV, i, 24)), [240, CY], [442, CY]),
+      { bumpers: [2, 5, 8, 11].map(i => ({ x: crossV[i][0], y: crossV[i][1], r: 15 })) }),   // the four inside corners kick back
     ellipse: {
       id: 'ellipse', name: 'Ellipse', kind: 'ellipse', a: EA, b: EB, c: EC, cx: CX, cy: CY,
       f1: [CX - EC, CY], f2: [CX + EC, CY],
       pockets: [{ x: CX + EC, y: CY, cap: 15, hole: true, aim: [CX + EC, CY] }, side(CX, CY - EB - R, 0, 1, 22), side(CX, CY + EB + R, 0, -1, 22), side(CX - EA - R, CY, 1, 0, 22)],
       head: [262, CY], foot: [452, CY],
+      well: { x: CX, y: CY, r: 90, g: 400 },   // pulls rolling balls toward its centre, so their paths bend
     },
   };
   const TABLE_IDS = ['hexagon', 'cross', 'ellipse'];
@@ -64,6 +71,13 @@ const PoolLib = (() => {
   }
 
   /* ---------- cushions ---------- */
+  // side spin grips the cushion and throws the ball sideways along it
+  // (right spin comes off a cushion further to the right of the way the ball was going, left spin to the left)
+  function railSpin(b, nx, ny, vn, ix, iy) {
+    if (!b.ss) return;
+    const tx = -ny, ty = nx, side = Math.sign(-iy * tx + ix * ty) || 1, k = b.ss * 0.45 * -vn * side;
+    b.vx += tx * k; b.vy += ty * k; b.ss *= 0.5;
+  }
   function collideWalls(T, b, hk) {
     if (T.kind === 'ellipse') {
       const dx = b.x - T.cx, dy = b.y - T.cy, f = dx * dx / (T.a * T.a) + dy * dy / (T.b * T.b);
@@ -71,7 +85,7 @@ const PoolLib = (() => {
       const s = 1 / Math.sqrt(f); b.x = T.cx + dx * s; b.y = T.cy + dy * s;
       let nx = -(dx * s) / (T.a * T.a), ny = -(dy * s) / (T.b * T.b); const nl = Math.hypot(nx, ny); nx /= nl; ny /= nl;
       const vn = b.vx * nx + b.vy * ny;
-      if (vn < 0) { b.vx -= (1 + E_RAIL) * vn * nx; b.vy -= (1 + E_RAIL) * vn * ny; if (hk) hk.rail(b, -vn); }
+      if (vn < 0) { const ix = b.vx, iy = b.vy; b.vx -= (1 + E_RAIL) * vn * nx; b.vy -= (1 + E_RAIL) * vn * ny; railSpin(b, nx, ny, vn, ix, iy); if (hk) hk.rail(b, -vn); }
       return;
     }
     for (const [p, q] of T.edges) {
@@ -81,7 +95,7 @@ const PoolLib = (() => {
       if (d > 1e-6) { nx = dx / d; ny = dy / d; } else { nx = T.centroid[0] - b.x; ny = T.centroid[1] - b.y; const l = Math.hypot(nx, ny); nx /= l; ny /= l; }
       b.x = c[0] + nx * R; b.y = c[1] + ny * R;
       const vn = b.vx * nx + b.vy * ny;
-      if (vn < 0) { b.vx -= (1 + E_RAIL) * vn * nx; b.vy -= (1 + E_RAIL) * vn * ny; if (hk) hk.rail(b, -vn); }
+      if (vn < 0) { const ix = b.vx, iy = b.vy; b.vx -= (1 + E_RAIL) * vn * nx; b.vy -= (1 + E_RAIL) * vn * ny; railSpin(b, nx, ny, vn, ix, iy); if (hk) hk.rail(b, -vn); }
     }
     if (!inPoly(b.x, b.y, T.verts)) {   // never leave the table: put it back just inside the nearest cushion
       let best = null, bd = 1e9;
@@ -91,8 +105,34 @@ const PoolLib = (() => {
     }
   }
 
+  /* ---------- gadgets ---------- */
+  function collideBumpers(T, b, hk) {
+    for (const u of T.bumpers) {
+      const dx = b.x - u.x, dy = b.y - u.y, d = Math.hypot(dx, dy);
+      if (d >= u.r + R || d < 1e-6) continue;
+      const nx = dx / d, ny = dy / d, vn = b.vx * nx + b.vy * ny;
+      b.x = u.x + nx * (u.r + R); b.y = u.y + ny * (u.r + R);
+      if (vn < 0) {
+        b.vx -= 1.9 * vn * nx; b.vy -= 1.9 * vn * ny;
+        if (-vn > 25) { b.vx += nx * KICK; b.vy += ny * KICK; if (hk && hk.bump) hk.bump(b, u, -vn); }
+      }
+    }
+  }
+  function warp(T, b, hk) {
+    const P = T.portals;
+    if (b.warp != null) { const q = P[b.warp]; if (Math.hypot(b.x - q.x, b.y - q.y) > q.r + R + 2) b.warp = null; else return; }
+    for (let i = 0; i < 2; i++) {
+      const p = P[i]; if (Math.hypot(b.x - p.x, b.y - p.y) >= p.r) continue;
+      const q = P[1 - i], v = Math.hypot(b.vx, b.vy) || 1;
+      b.x = q.x + b.vx / v; b.y = q.y + b.vy / v; b.warp = 1 - i;
+      if (hk && hk.warp) hk.warp(b, p, q);
+      return;
+    }
+  }
+
   /* ---------- one physics frame: move, pockets, cushions, ball-on-ball, then cloth friction ----------
-     balls: [{ n, x, y, vx, vy, on }]; hk (optional): { hit(a, b, impulse), rail(b, impulse), pot(b, pocket) }
+     balls: [{ n, x, y, vx, vy, on, sf, ss }]  (sf/ss: follow and side spin, cue ball only)
+     hk (optional): { hit(a, b, impulse), rail(b, impulse), pot(b, pocket), bump(b, bumper, impulse), warp(b, from, to) }
      returns true while anything is still rolling */
   function step(T, balls, dt, hk) {
     let maxv = 0;
@@ -104,7 +144,10 @@ const PoolLib = (() => {
       for (const b of balls) {
         if (!b.on || !(b.vx || b.vy)) continue;
         for (const p of T.pockets) if ((b.x - p.x) ** 2 + (b.y - p.y) ** 2 < p.cap * p.cap) { b.on = false; b.vx = b.vy = 0; b.x = p.x; b.y = p.y; if (hk) hk.pot(b, p); break; }
-        if (b.on) collideWalls(T, b, hk);
+        if (!b.on) continue;
+        collideWalls(T, b, hk);
+        if (T.bumpers) collideBumpers(T, b, hk);
+        if (T.portals) warp(T, b, hk);
       }
       for (let i = 0; i < NB; i++) {
         const a = balls[i]; if (!a.on) continue;
@@ -118,7 +161,12 @@ const PoolLib = (() => {
           if (pv < 0 && vv > 1e-9) { const disc = pv * pv - vv * (d2 - 4 * R * R); if (disc >= 0) { back = (-pv - Math.sqrt(disc)) / vv; if (back < -h * 1.5 || back > 0) back = 0; } }
           a.x += a.vx * back; a.y += a.vy * back; c.x += c.vx * back; c.y += c.vy * back;
           const ex = c.x - a.x, ey = c.y - a.y, d = Math.hypot(ex, ey) || 0.01, nx = ex / d, ny = ey / d, vrel = (a.vx - c.vx) * nx + (a.vy - c.vy) * ny;
-          if (vrel > 0) { const jj = (1 + E_BALL) / 2 * vrel; a.vx -= jj * nx; a.vy -= jj * ny; c.vx += jj * nx; c.vy += jj * ny; if (hk) hk.hit(a, c, vrel); }
+          if (vrel > 0) {
+            const cue = a.n === 0 ? a : c.n === 0 ? c : null, pre = cue && cue.sf ? [cue.vx, cue.vy] : null;
+            const jj = (1 + E_BALL) / 2 * vrel; a.vx -= jj * nx; a.vy -= jj * ny; c.vx += jj * nx; c.vy += jj * ny;
+            if (pre) { cue.vx += pre[0] * cue.sf * FOLLOW; cue.vy += pre[1] * cue.sf * FOLLOW; cue.sf = 0; cue.ss *= 0.4; }   // follow or draw kicks in at the hit
+            if (hk) hk.hit(a, c, vrel);
+          }
           a.x -= a.vx * back; a.y -= a.vy * back; c.x -= c.vx * back; c.y -= c.vy * back;
           const gx = c.x - a.x, gy = c.y - a.y, g = Math.hypot(gx, gy) || 0.01;
           if (g < 2 * R) { const push = (2 * R - g) / 2; a.x -= gx / g * push; a.y -= gy / g * push; c.x += gx / g * push; c.y += gy / g * push; }
@@ -126,8 +174,16 @@ const PoolLib = (() => {
       }
     }
     let moving = false;
+    const W = T.well;
     for (const b of balls) {
       if (!b.on || !(b.vx || b.vy)) continue;
+      if (W) { const dx = W.x - b.x, dy = W.y - b.y, d = Math.hypot(dx, dy); if (d < W.r && d > 1) { const g = W.g * (1 - d / W.r) * dt / d; b.vx += dx * g; b.vy += dy * g; } }
+      if (b.ss) {   // side spin swerves the cue ball, and wears off
+        const v0 = Math.hypot(b.vx, b.vy);
+        if (v0 > 30) { const k = b.ss * CURVE * dt / v0, ox = b.vx, oy = b.vy; b.vx = ox - oy * k; b.vy = oy + ox * k; const v1 = Math.hypot(b.vx, b.vy); b.vx *= v0 / v1; b.vy *= v0 / v1; }   // right spin bends right
+        b.ss *= Math.exp(-dt / SPIN_LIFE); if (Math.abs(b.ss) < 0.01) b.ss = 0;
+      }
+      if (b.sf) { b.sf *= Math.exp(-dt / DRAW_LIFE); if (Math.abs(b.sf) < 0.01) b.sf = 0; }
       const v = Math.hypot(b.vx, b.vy), nv = v - (MU + LIN * v) * dt;
       if (nv < STOP) { b.vx = b.vy = 0; } else { b.vx *= nv / v; b.vy *= nv / v; moving = true; }
     }
@@ -135,13 +191,25 @@ const PoolLib = (() => {
   }
 
   // play a shot to the end on a copy of the balls (used by the computer to think, never to move real balls)
-  function simulate(T, balls, a, p, maxT = 20) {
-    const bs = balls.map(b => ({ n: b.n, x: b.x, y: b.y, vx: 0, vy: 0, on: b.on }));
+  function simulate(T, balls, a, p, maxT = 20, sx = 0, sy = 0) {
+    const bs = balls.map(b => ({ n: b.n, x: b.x, y: b.y, vx: 0, vy: 0, on: b.on, sf: 0, ss: 0 }));
     const cue = bs.find(b => b.n === 0), v = clamp(p, 0, 1) * MAXV, out = { first: null, potted: [], scratch: false, rails: 0, balls: bs };
-    cue.vx = Math.cos(a) * v; cue.vy = Math.sin(a) * v;
+    strike(cue, a, v, sx, sy);
     const hk = { hit(x, y) { if (out.first == null && (x.n === 0 || y.n === 0)) out.first = x.n === 0 ? y.n : x.n; }, rail() { out.rails++; }, pot(b) { if (b.n === 0) out.scratch = true; else out.potted.push(b.n); } };
     for (let t = 0; t < maxT && step(T, bs, DT, hk); t += DT);
     return out;
+  }
+
+  // the cue tip meets the cue ball: speed, direction and spin (sx, sy kept inside the ball's face)
+  function strike(cue, a, v, sx = 0, sy = 0) {
+    const l = Math.hypot(sx, sy); if (l > 1) { sx /= l; sy /= l; }
+    cue.vx = Math.cos(a) * v; cue.vy = Math.sin(a) * v; cue.sf = sy || 0; cue.ss = sx || 0; cue.warp = null;
+  }
+  // can a ball sit here without touching a gadget?
+  function gadgetFree(T, x, y) {
+    for (const u of T.bumpers || []) if (Math.hypot(x - u.x, y - u.y) < u.r + R + 1) return false;
+    for (const p of T.portals || []) if (Math.hypot(x - p.x, y - p.y) < p.r + R + 1) return false;
+    return true;
   }
 
   // the standard 15-ball triangle, apex at the foot spot pointing at the cue ball
@@ -160,7 +228,7 @@ const PoolLib = (() => {
   const kind = n => (n === 8 ? 'eight' : n < 8 ? 'solid' : 'stripe');
   // can the cue ball be put here? on the cloth, clear of pockets and other balls
   function placeOk(T, balls, x, y) {
-    if (!isFinite(x) || !isFinite(y) || !fits(T, x, y, 0.5)) return false;
+    if (!isFinite(x) || !isFinite(y) || !fits(T, x, y, 0.5) || !gadgetFree(T, x, y)) return false;
     for (const p of T.pockets) if (Math.hypot(x - p.x, y - p.y) < p.cap + R) return false;
     for (const b of balls) if (b.on && b.n !== 0 && Math.hypot(x - b.x, y - b.y) < 2 * R + 0.5) return false;
     return true;
@@ -176,7 +244,7 @@ const PoolLib = (() => {
   const distBetween = (v0, v1) => (v0 - v1) / LIN - MU / (LIN * LIN) * Math.log((MU + LIN * v0) / (MU + LIN * v1));
   function speedFor(s, vEnd = 0) { let lo = vEnd, hi = 6000; for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (distBetween(mid, vEnd) < s) lo = mid; else hi = mid; } return hi; }
 
-  return { R, MAXV, E_BALL, TABLES, TABLE_IDS, CX, CY, step, simulate, rack, kind, placeOk, freeSpot, fits, speedFor, closestOnSeg };
+  return { R, MAXV, E_BALL, TABLES, TABLE_IDS, CX, CY, step, simulate, strike, rack, kind, placeOk, freeSpot, fits, speedFor, closestOnSeg };
 })();
 
 class PoolModel extends BaseModel {
@@ -210,11 +278,11 @@ class PoolModel extends BaseModel {
       const { x, y } = a.place;
       if (PoolLib.placeOk(this.table, this.balls, x, y)) { this.cue.x = x; this.cue.y = y; this.emit('placed', { x, y }); }
     }
-    if (a.shoot && isFinite(a.shoot.a)) this.shoot(a.shoot.a, clamp(+a.shoot.p || 0, 0.04, 1));
+    if (a.shoot && isFinite(a.shoot.a)) this.shoot(a.shoot.a, clamp(+a.shoot.p || 0, 0.04, 1), clamp(+a.shoot.sx || 0, -1, 1), clamp(+a.shoot.sy || 0, -1, 1));
   }
-  shoot(a, p) {
-    const c = this.cue, v = p * PoolLib.MAXV;
-    c.vx = Math.cos(a) * v; c.vy = Math.sin(a) * v;
+  shoot(a, p, sx = 0, sy = 0) {
+    const c = this.cue;
+    PoolLib.strike(c, a, p * PoolLib.MAXV, sx, sy);
     this.phase = 'roll'; this.rollT = 0; this.inHand = false; this.shots[this.turn]++;
     this.shot = { first: null, potted: [], scratch: false, rails: 0 };
     this.emit('shot', { side: this.turn, p });
@@ -226,11 +294,13 @@ class PoolModel extends BaseModel {
       hit(x, y, imp) { if (s.first == null && (x.n === 0 || y.n === 0)) s.first = x.n === 0 ? y.n : x.n; if (imp > 40) self.emit('click', { v: imp }); },
       rail(b, imp) { s.rails++; if (imp > 60) self.emit('rail', { v: imp }); },
       pot(b, p) { if (b.n === 0) s.scratch = true; else s.potted.push(b.n); self.emit('pot', { n: b.n, x: p.x, y: p.y }); },
+      bump(b, u, imp) { self.emit('bump', { x: u.x, y: u.y, v: imp }); },
+      warp(b, p, q) { self.emit('warp', { n: b.n, x0: p.x, y0: p.y, x1: q.x, y1: q.y }); },
     };
     this.rollT += dt;
     const moving = PoolLib.step(this.table, this.balls, dt, hk);
     if (moving && this.rollT < 25) return;
-    for (const b of this.balls) b.vx = b.vy = 0;
+    for (const b of this.balls) { b.vx = b.vy = 0; b.sf = b.ss = 0; b.warp = null; }
     this.resolve();
   }
   // 8-ball rules, simplified the way phone pool games play them (no calling pockets)
