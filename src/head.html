@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cocktail Cabinet — Seven Arcade Games</title>
-<meta name="description" content="Seven arcade games in one cabinet. Every game has a normal mode and a flipped mode where the computer takes your usual seat.">
+<title>Cocktail Cabinet — Eight Arcade Games</title>
+<meta name="description" content="Eight arcade games in one cabinet. Most have a normal mode and a flipped mode where the computer takes your usual seat.">
 <script>
   // pick the theme before first paint: saved choice, else the system setting
   (function () { var t; try { t = localStorage.getItem('cab-theme'); } catch (e) { }
@@ -53,7 +53,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 [data-theme="dark"] .hero h1 em{text-shadow:0 0 18px rgba(53,224,255,.55)}
 .hero p{color:var(--dim);max-width:640px;font-size:17px;line-height:1.55;margin:0 0 30px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:18px}
-.card{position:relative;text-align:left;background:var(--cardBg);border:1px solid var(--line);border-radius:14px;padding:0;overflow:hidden;transition:transform .15s, border-color .15s, box-shadow .15s}
+.card{display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch;position:relative;text-align:left;background:var(--cardBg);border:1px solid var(--line);border-radius:14px;padding:0;overflow:hidden;transition:transform .15s, border-color .15s, box-shadow .15s}
 .card:hover,.card:focus-visible{transform:translateY(-3px);border-color:var(--c);box-shadow:0 10px 40px -14px var(--c);outline:none}
 .card canvas{display:block;width:100%;aspect-ratio:4/3;background:var(--thumb);border-bottom:1px solid var(--line)}
 .card .meta{padding:14px 16px 16px}
@@ -79,6 +79,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .seg{display:grid;grid-template-columns:1fr 1fr;background:var(--well);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
 .seg button{border:0;background:transparent;border-radius:7px;padding:9px 0;font-size:14px;font-weight:700;color:var(--dim)}
 .seg button.on{background:var(--c);color:var(--onAccent)}
+.seg.three{grid-template-columns:repeat(3,1fr);margin-bottom:2px}
 .modeline{font-size:13px;color:var(--ink);margin:10px 2px 12px;line-height:1.45}
 .roles{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
 .role{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-left:4px solid var(--sc);border-radius:10px;padding:10px 12px;background:var(--panel2)}
@@ -194,8 +195,8 @@ button{font:inherit;color:inherit;cursor:pointer}
 
 <main id="menu">
   <section class="hero">
-    <h1>Seven games.<br><em>Flip them.</em></h1>
-    <p>Every game has two modes. <b>Normal</b> is the game as you know it. <b>Flipped</b> hands your usual seat to the computer, and you play the other side.</p>
+    <h1>Eight games.<br><em>Flip them.</em></h1>
+    <p>Every game has two modes. <b>Normal</b> is the game as you know it. <b>Flipped</b> hands your usual seat to the computer, and you play the other side. Battleship and Geo Pool let you take on the computer or a friend.</p>
   </section>
   <div class="grid" id="grid"></div>
   <p class="foot"><a class="chip" href="#lab">Balance Lab: how each level was tuned with Monte Carlo simulation →</a></p>

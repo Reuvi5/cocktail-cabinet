@@ -178,7 +178,7 @@ const Cab = {
     this.g = null; this.state = 'menu';
     document.getElementById('menu').hidden = false;
     document.getElementById('view').hidden = true;
-    document.title = 'Cocktail Cabinet — Seven Arcade Games';
+    document.title = 'Cocktail Cabinet — Eight Arcade Games';
   },
 
   teardown() {
@@ -231,7 +231,7 @@ const Cab = {
     // MODEL: the rules. CONTROLLERS: one per side. VIEW: draws the model.
     const rng = makeRng((Math.random() * 4294967296) >>> 0);
     const sides = this.ctrl.map(c => (c === 'cpu' ? { kind: 'computer', k } : { kind: 'human', k: 0 }));
-    const model = new g.Model({ mode: this.mode, sides, rng: rng.fork() });
+    const model = new g.Model(Object.assign({ mode: this.mode, sides, rng: rng.fork() }, g.modelOpts ? g.modelOpts(this.store()) : {}));
     const ctrls = this.ctrl.map((c, i) => (c === 'cpu' ? new g.Computer(i, k, rng.fork()) : new g.Human(i, model, this.ctrl)));
     const view = new g.View(model, { ctrl: this.ctrl.slice(), ctrls, level: lvl });
     this.inst = { model, ctrls, view };
@@ -286,6 +286,7 @@ const Cab = {
         <div><b>${s.name}</b><p>${cpu ? s.cpuHelp : s.goal}</p></div></div>`;
     });
     html += `</div>`;
+    if (g.panelSection) html += g.panelSection(this.store());   // game-specific choices (Geo Pool's table)
     if (this.hasCpu()) {
       const lv = this.level();
       html += `<h4>COMPUTER LEVEL</h4>

@@ -1,6 +1,6 @@
 # Builds the single-page site: index.html = page shell + every source file, in MVC order.
 import json, os
-ORDER = ['snake', 'breakout', 'flappy', 'asteroids', 'missile', 'imitation', 'battleship']
+ORDER = ['snake', 'breakout', 'flappy', 'asteroids', 'missile', 'imitation', 'battleship', 'pool']
 read = lambda p: open(p, encoding='utf-8').read()
 parts = ['engine.js']
 cal = json.load(open('calibration.json')) if os.path.exists('calibration.json') else {}

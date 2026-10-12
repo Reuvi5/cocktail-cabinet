@@ -21,6 +21,15 @@ model, then hands the model's events (sounds, explosions) to the view.
 Imitation is a chat, so its model is a `ImitationRound` running on a clock
 (`VirtualClock` in tests, real time on the page).
 
+Geo Pool (game 8) follows the same split. `pool.model.js` holds the three tables (hexagon,
+cross, ellipse), the ball physics and the 8-ball rules. The physics rewinds every ball-on-ball
+hit to the exact moment of contact, so the aim guide is exact. `pool.ai.js` holds the shot-finding
+brain shared by the computer and the simulated person. A stronger computer aims steadier,
+checks its best shots on a copy of the table, plays for its next shot, and at the top levels
+imagines banks and combinations. It never moves a ball. The ellipse's single focus pocket uses
+real geometry: the ball centres follow an ellipse, so any ball rolled over the marked focus
+bounces off the cushion into the pocket at the other focus.
+
 ## The simulated person
 
 Each `SimHuman` plays a sensible strategy but has human limits, set by skill `s`
